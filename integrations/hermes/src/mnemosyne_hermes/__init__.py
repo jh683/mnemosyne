@@ -249,7 +249,7 @@ except Exception as _persona_import_exc:  # pragma: no cover - graceful import f
         def _with_persona_block(self, base: str) -> str:
             return base
 
-__version__ = "0.7.4"
+__version__ = "0.7.5"
 
 logger = logging.getLogger(__name__)
 
@@ -1164,6 +1164,24 @@ class MnemosyneMemoryProvider(HermesPersonaPromptMixin, MemoryProvider):
     _SYNC_TURN_SLOW_THRESHOLD_SECONDS = _parse_env_float("MNEMOSYNE_SYNC_TURN_SLOW_THRESHOLD", 5)
 
     def __init__(self):
+        # P1b (2026-09-20 incident): ambient attributes replaced by a home-keyed
+        # bindings dict resolved AT CALL TIME from the turn's scope, with the
+        # last-initialized binding as out-of-turn fallback (cron/teardown keep
+        # legacy behavior exactly). _beam/_agent_identity/_session_id are
+        # properties over these slots; see _binding_slot below.
+        self._bindings: Dict[str, Dict[str, Any]] = {
+            "default": {"beam": None, "agent_identity": "", "session_id": "hermes_default"},
+        }
+        self._ambient_key = "default"
+        # Raw home string of the home currently being initialized, or None.
+        # Routes binding writes to the home under construction even when no
+        # turn scope exists; cleared in the finally of _initialize_locked so
+        # it can never outlive the init that set it.
+        self.__dict__["_init_home"]: Optional[str] = None
+        # Seed property-backed slots on the ambient binding without resolving
+        # turn-scoped HERMES_HOME — __init__ runs before initialize() exists.
+        _ambient = self._bindings[self._ambient_key]
+        _ambient["beam"] = None
         # NOTE: do NOT write `self._beam = None` here. `_beam` is a property
         # whose setter routes through _write_slot() -> _p1b_current_key(), and
         # that key is a CONTEXT-LOCAL ContextVar. A provider constructed while
@@ -1204,20 +1222,6 @@ class MnemosyneMemoryProvider(HermesPersonaPromptMixin, MemoryProvider):
         # time to try again; None means nothing to retry.
         self._retry_init_args: Optional[tuple] = None
         self._retry_init_at: float = 0.0
-        # P1b (2026-09-20 incident): ambient attributes replaced by a home-keyed
-        # bindings dict resolved AT CALL TIME from the turn's scope, with the
-        # last-initialized binding as out-of-turn fallback (cron/teardown keep
-        # legacy behavior exactly). _beam/_agent_identity/_session_id are
-        # properties over these slots; see _binding_slot below.
-        self._bindings: Dict[str, Dict[str, Any]] = {
-            "default": {"beam": None, "agent_identity": "", "session_id": "hermes_default"},
-        }
-        self._ambient_key = "default"
-        # Raw home string of the home currently being initialized, or None.
-        # Routes binding writes to the home under construction even when no
-        # turn scope exists; cleared in the finally of _initialize_locked so
-        # it can never outlive the init that set it.
-        self.__dict__["_init_home"]: Optional[str] = None
         self._hermes_home = ""
         self._platform = "cli"
         self._agent_context = "primary"
